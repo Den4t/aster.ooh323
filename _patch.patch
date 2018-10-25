@@ -1,0 +1,514 @@
+--- ./chan_ooh323.c+	2017-06-29 18:20:05.000000001 +0300
++++ ./chan_ooh323.c	2017-06-30 15:13:27.000000001 +0300
+@@ -101,6 +101,13 @@
+ #define FAXDETECT_CNG	1
+ #define FAXDETECT_T38	2
+ 
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++//!!!! we use # symbol in a-num
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++#define __isdigit(x) (isdigit(x) || (x)=='#')
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++            			
++
+ /* Channel description */
+ static const char type[] = "OOH323";
+ static const char tdesc[] = "Objective Systems H323 Channel Driver";
+@@ -210,6 +217,10 @@
+ 	char *host;
+ 	char *callerid_name;
+ 	char *callerid_num;
++//!!!!!!!! redirecting number and reason !!!!!
++	char redirecting_num[AST_MAX_EXTENSION];
++	unsigned int redirecting_reason;
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ 	char caller_h323id[AST_MAX_EXTENSION];
+ 	char caller_dialedDigits[AST_MAX_EXTENSION];
+ 	char caller_email[AST_MAX_EXTENSION];
+@@ -1033,6 +1044,19 @@
+ 	/* Retrieve vars */
+ 
+ 
++//!!!!!!!!!!!!!! get redirecting number and reason
++	if ((val = pbx_builtin_getvar_helper(ast, "H323_REDIRECTING_NUMBER"))) {
++		ast_copy_string(p->redirecting_num, val, sizeof(p->redirecting_num));
++	}
++	if ((val = pbx_builtin_getvar_helper(ast, "H323_REDIRECTING_REASON"))) {
++		int v=atoi(val);
++		if(v<0 || v>15) v=0;
++		p->redirecting_reason=v;
++	} else {
++		p->redirecting_reason=0;
++	}
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++
+ 	if ((val = pbx_builtin_getvar_helper(ast, "CALLER_H323ID"))) {
+ 		ast_copy_string(p->caller_h323id, val, sizeof(p->caller_h323id));
+ 	}
+@@ -1220,6 +1244,12 @@
+ 		p->lastrtptx = time(NULL);
+ 
+ 		if (f->frametype == AST_FRAME_MODEM) {
++			//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++			//!!!!! for faxes in T38 mode we do not have incoming udptl, 
++			//!!!!! so update timeout here
++			//!!!!! or session disconnected in rtptimeout seconds
++		        p->lastrtprx = time(NULL);
++			//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ 			ast_debug(1, "Send UDPTL %u/%d len %d for %s\n",
+ 				f->frametype, f->subclass.integer, f->datalen, ast_channel_name(ast));
+ 			if (p->udptl)
+@@ -1343,9 +1373,14 @@
+ 		if (ast_channel_state(ast) == AST_STATE_RING || ast_channel_state(ast) == AST_STATE_RINGING) {
+ 			if (!p->alertsent) {
+ 				if (gH323Debug) {
+-					ast_debug(1, "Sending manual ringback for %s, res = %u\n",
+-						callToken,
+-						ooManualRingback(callToken));
++					//!!вместе с ooh323 debug надо включать и core set debug 1
++					//!!иначе - core dump
++					//!!ast_debug(1, "Sending manual ringback for %s, res = %u\n",
++					//!!	callToken,
++					//!!	ooManualRingback(callToken));
++					//!!
++					ast_debug(1, "Sending manual ringback for %s\n", callToken);
++					ooManualRingback(callToken);
+ 				} else {
+ 					ooManualRingback(callToken);
+ 				}
+@@ -2037,10 +2072,12 @@
+ 		if (!ast_strlen_zero(p->callerid_name)) {
+ 			ooCallSetCallerId(call, p->callerid_name);
+ 		}
++
+ 		if (!ast_strlen_zero(p->callerid_num)) {
+ 			i = 0;
+ 			while (*(p->callerid_num + i) != '\0') {
+-            			if(!isdigit(*(p->callerid_num+i))) { break; }
++            			//!!!!!!!if(!isdigit(*(p->callerid_num+i))) { break; }
++            			if(!__isdigit(*(p->callerid_num+i))) { break; }
+ 				i++;
+ 			}
+          		if(*(p->callerid_num+i) == '\0')
+@@ -2051,6 +2088,23 @@
+ 			}
+ 		}
+ 		
++		///!!!!!!!!!!! set redirecting number and reason !!!!!!!!!
++		if (!ast_strlen_zero(p->redirecting_num)) {
++			i = 0;
++			while (*(p->redirecting_num + i) != '\0') {
++            			if(!isdigit(*(p->redirecting_num+i))) { break; }
++				i++;
++			}
++         		if(*(p->redirecting_num+i) == '\0') {
++				if (gH323Debug) {
++					ast_verb(0, ">>>> onOutgoingCall: setting redirecting number: %s reason: %d\n", 
++						p->redirecting_num, p->redirecting_reason);
++				}
++				ooCallSetRedirectingNumber(call, p->redirecting_num, p->redirecting_reason);
++			}
++		}
++		//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++		
+ 		if (!ast_strlen_zero(p->caller_h323id))
+ 			ooCallAddAliasH323ID(call, p->caller_h323id);
+ 
+@@ -2121,7 +2175,8 @@
+ 		if (!ast_strlen_zero(p->callerid_num)) {
+ 			i = 0;
+ 			while (*(p->callerid_num + i) != '\0') {
+-            			if(!isdigit(*(p->callerid_num+i))) { break; }
++            			//!!!!!!!!if(!isdigit(*(p->callerid_num+i))) { break; }
++            			if(!__isdigit(*(p->callerid_num+i))) { break; }
+ 				i++;
+ 			}
+          		if(*(p->callerid_num+i) == '\0')
+@@ -2132,6 +2187,22 @@
+ 			}
+ 		}
+ 		
++		///!!!!!!!!!!! set redirecting number and reason !!!!!!!!!
++		if (!ast_strlen_zero(p->redirecting_num)) {
++			i = 0;
++			while (*(p->redirecting_num + i) != '\0') {
++            			if(!isdigit(*(p->redirecting_num+i))) { break; }
++				i++;
++			}
++         		if(*(p->redirecting_num+i) == '\0')
++				if (gH323Debug) {
++					ast_verb(0, ">>>> onNewCallCreated: setting redirecting number: %s reason: %d\n", 
++						p->redirecting_num, p->redirecting_reason);
++				}
++				ooCallSetRedirectingNumber(call, p->redirecting_num, p->redirecting_reason);
++		}
++		//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++		
+ 		if (!ast_strlen_zero(p->caller_h323id))
+ 			ooCallAddAliasH323ID(call, p->caller_h323id);
+ 
+@@ -4929,6 +5000,13 @@
+ 		ast_queue_control_data(p->owner, AST_CONTROL_T38_PARAMETERS, &parameters, sizeof(parameters));
+ 	}
+ 
++	//!!!! ckose rtp if was open !!!!!!
++	if (p->rtp) {
++                ast_verb(0, ">>>>  Closing RTP\n");
++                ast_rtp_instance_stop(p->rtp);
++        }
++	//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++
+ 	ast_channel_unlock(p->owner);
+ 	ast_mutex_unlock(&p->lock);
+ 
+--- ./ooh323c/src/ooCalls.h+	2017-06-29 18:20:01.000000001 +0300
++++ ./ooh323c/src/ooCalls.h	2017-06-29 18:20:01.000000001 +0300
+@@ -170,6 +170,10 @@
+                                           call. */
+    char                 *callingPartyNumber;
+    char                 *calledPartyNumber; 
++//!!!!!!!!!!!!!! added
++   char                 *redirectingNumber; 
++   unsigned		redirectingReason;
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    H225ConferenceIdentifier confIdentifier;
+    ASN1UINT             flags;
+    OOCallState          callState;
+@@ -387,6 +391,20 @@
+ EXTERN int ooCallSetCallingPartyNumber
+ (OOH323CallData *call, const char *number);
+ 
++
++//!!!!!!!!!!!!!!! redirecting number and reason
++/**
++ * This function is used to set redirecting number for a particular call.
++ * @param call          Handle to the call.
++ * @param number        Redirecting number value.
++ * @param reason        Redirecting reason
++ *
++ * @return              OO_OK, on success. OO_FAILED, on failure.
++ */
++EXTERN int ooCallSetRedirectingNumber
++(OOH323CallData *call, const char *number, unsigned reason);
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++
+ /**
+  * This function is used to retrieve calling party number of a particular call.
+  * @param call          Handle to the call.
+--- ./ooh323c/src/ooCalls.c+	2017-06-29 18:20:01.000000001 +0300
++++ ./ooh323c/src/ooCalls.c	2017-06-29 18:24:13.000000001 +0300
+@@ -136,6 +136,10 @@
+    }
+ 
+    call->calledPartyNumber = NULL;
++//!!!!!!!!!!!!!!!!!
++   call->redirectingNumber = NULL;
++   call->redirectingReason = 0;
++//!!!!!!!!!!!!!!!!!
+    call->h245ConnectionAttempts = 0;
+    call->h245SessionState = OO_H245SESSION_IDLE;
+    call->dtmfmode = gH323ep.dtmfmode;
+@@ -415,6 +419,28 @@
+    return OO_OK;
+ }
+ 
++//!!!!!!!!!!!!!! redirecting number and reason
++int ooCallSetRedirectingNumber(OOH323CallData *call, const char *number, unsigned reason)
++{
++   if(call->redirectingNumber) 
++      memFreePtr(call->pctxt, call->redirectingNumber);
++
++   call->redirectingNumber = (char*) memAlloc(call->pctxt, strlen(number)+1);
++   if(call->redirectingNumber)
++   {
++     strcpy(call->redirectingNumber, number);
++   }
++   else{
++      OOTRACEERR3("Error:Memory - ooCallSetRedirectingNumber - "
++                  "redirectingNumber.(%s, %s)\n", call->callType, 
++                  call->callToken);
++      return OO_FAILED;
++   }
++   call->redirectingReason = reason;
++   return OO_OK;
++}
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++
+ int ooCallGetCallingPartyNumber(OOH323CallData *call, char *buffer, int len)
+ {
+    if(call->callingPartyNumber)
+--- ./ooh323c/src/ooq931.c+	2017-06-29 18:20:01.000000001 +0300
++++ ./ooh323c/src/ooq931.c	2017-06-30 14:11:47.000000001 +0300
+@@ -229,6 +229,48 @@
+          OOTRACEDBGB1("   }\n");
+       }
+ 
++      //!!!!!!!!!!! Handle Redirecting number Q931RedirectingNumberIE
++      //packing sequence
++      //	pmsg->redirectingNumberIE->data[0] = (((type&7)<<4)|(plan&15));
++      //	pmsg->redirectingNumberIE->data[1] = (((presentation&3)<<5)|(screening&3));
++      //	pmsg->redirectingNumberIE->data[2] = (0x80|(reason&15));
++
++      if(ie->discriminator == Q931RedirectingNumberIE)
++      {
++         OOTRACEDBGB1("   RedirectingNumber IE = {\n");
++         if(ie->length < OO_MAX_NUMBER_LENGTH)
++         {
++            int numoffset=1; 
++            if(!(0x80 & ie->data[0])) {
++		int plan, type;
++		plan=(ie->data[0] & 15);
++		type=((ie->data[0]>>4)&7);
++            	OOTRACEDBGB2("      type: %d\n", type);
++            	OOTRACEDBGB2("      plan: %d\n", plan);
++		
++		if(!(0x80 & ie->data[1])) {
++			numoffset = 3;
++			if(0x80 & ie->data[2]) {
++				int reason = (ie->data[2] & 15);
++				OOTRACEDBGB2("      reason: %d\n", reason);
++				
++			}
++		} else {
++			numoffset = 2;
++		}
++	    }
++            memcpy(number, ie->data+numoffset,ie->length-numoffset);
++            number[ie->length-numoffset]='\0';
++            OOTRACEDBGB2("      number: %s\n", number);
++         }
++         else{
++            OOTRACEERR3("Error:Calling redirecting number too long. (%s, %s)\n", 
++                           call->callType, call->callToken);
++         }
++         OOTRACEDBGB1("   }\n");
++      }
++      //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++
+       /* Handle Cause ie */
+       if(ie->discriminator == Q931CauseIE)
+       {
+@@ -413,6 +455,9 @@
+       (*q931msg)->bearerCapabilityIE = NULL;
+       (*q931msg)->callingPartyNumberIE = NULL;
+       (*q931msg)->calledPartyNumberIE = NULL;
++      //!!!!!!
++      (*q931msg)->redirectingNumberIE = NULL;
++      //!!!!!!
+       (*q931msg)->causeIE = NULL;
+       (*q931msg)->callstateIE = NULL;
+       return OO_OK;
+@@ -798,6 +843,18 @@
+       i += pq931Msg->calledPartyNumberIE->length;
+    }
+    
++//!!!!!!!!!!!!!!!!! redirecting number ie
++    /* Add redirecting number ie */
++   if(pq931Msg->redirectingNumberIE)
++   {
++      msgbuf[i++] = Q931RedirectingNumberIE;
++      msgbuf[i++] = pq931Msg->redirectingNumberIE->length;
++      memcpy(msgbuf+i, pq931Msg->redirectingNumberIE->data,
++                       pq931Msg->redirectingNumberIE->length);
++      i += pq931Msg->redirectingNumberIE->length;
++   }
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++   
+    /* Add keypad ie */
+    if(pq931Msg->keypadIE)
+    {
+@@ -2738,7 +2795,6 @@
+      ooQ931SetCallingPartyNumberIE(pctxt, q931msg,
+                             (const char*)call->callingPartyNumber, 1, 0, 0, 0);
+    
+-
+    /* Set called party number Q931 IE */
+    if(call->calledPartyNumber)
+       ooQ931SetCalledPartyNumberIE(pctxt, q931msg, 
+@@ -2768,6 +2824,15 @@
+ 
+    }
+ 
++//!!!!!!!!!!!!!!!!!!!! set redirecting nimber
++//TODO for now, set type=2 (national), plan=1 (isdn)
++   /* Set redirecting number  Q931 IE */
++   if(call->redirectingNumber && call->redirectingNumber[0])
++     ooQ931SetRedirectingNumberIE(pctxt, q931msg,
++                            (const char*)call->redirectingNumber, 1, 2, 0, 0, call->redirectingReason);
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!   
++
++
+    q931msg->userInfo = (H225H323_UserInformation*)memAlloc(pctxt,
+                              sizeof(H225H323_UserInformation));
+    if(!q931msg->userInfo)
+@@ -3555,6 +3620,57 @@
+    return OO_OK;
+ }
+ 
++//!!!!!!!!!!!!!!!! set redirecting number ie
++//example:
++//61>    74   01110100 T 
++//62>    0D   00001101 L 
++//                       ......redirectingNum
++//                       ........octet-3
++//63>    00   0-------   ..........ext:0x0 (0)
++//            -000----   ..........type-of-num:unknown (0)
++//            ----0000   ..........num-plan-iden:unknow (0)
++//                       ........octet-3a
++//64>    00   0-------   ..........ext1:0x0 (0)
++//            -00-----   ..........presentation-ind:presentation-allowed (0)
++//            ---000--   ..........spare:0x0 (0)
++//            ------00   ..........screening-indicator:user-provided-not-screened (0)
++//                                                                                                                                                   ........octet-3b
++//65>    82   1-------   ..........ext1:0x1 (1)
++//            -000----   ..........spare:0x0 (0)
++//            ----0010   ..........redirecting-reason:h323RRCFNoReply (2)
++int ooQ931SetRedirectingNumberIE
++   (OOCTXT* pctxt, Q931Message *pmsg, const char *number, unsigned plan, unsigned type, 
++    unsigned presentation, unsigned screening, unsigned reason)
++{
++   unsigned len = 0;
++   /* OOCTXT *pctxt = &gH323ep.msgctxt; */
++
++   if(pmsg->redirectingNumberIE)
++   {
++      memFreePtr(pctxt, pmsg->redirectingNumberIE);
++      pmsg->redirectingNumberIE = NULL;
++   }
++
++   len = strlen(number);
++   pmsg->redirectingNumberIE = (Q931InformationElement*) 
++                      memAlloc(pctxt, sizeof(Q931InformationElement)+len+3-1);
++   if(!pmsg->redirectingNumberIE)
++   {
++      OOTRACEERR1("Error:Memory - ooQ931SetRedirectingNumberIE - "
++                  "redirectingNumberIE\n");
++      return OO_FAILED;
++   }
++   pmsg->redirectingNumberIE->discriminator = Q931RedirectingNumberIE;
++   pmsg->redirectingNumberIE->length = len+3;
++   pmsg->redirectingNumberIE->data[0] = (((type&7)<<4)|(plan&15));
++   pmsg->redirectingNumberIE->data[1] = (((presentation&3)<<5)|(screening&3));
++   pmsg->redirectingNumberIE->data[2] = (0x80|(reason&15)); //how many bits the reason field length ???
++   memcpy(pmsg->redirectingNumberIE->data+3, number, len);
++
++   return OO_OK;
++}
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++
+ int ooQ931SetCalledPartyNumberIE
+    (OOCTXT* pctxt, Q931Message *pmsg, const char *number, unsigned plan, unsigned type)
+ {
+--- ./ooh323c/src/ooq931.h+	2017-06-29 18:20:01.000000001 +0300
++++ ./ooh323c/src/ooq931.h	2017-06-29 18:20:01.000000001 +0300
+@@ -244,6 +244,9 @@
+    Q931InformationElement *bearerCapabilityIE;
+    Q931InformationElement *callingPartyNumberIE;
+    Q931InformationElement *calledPartyNumberIE;
++//!!!! Redirecting number IE
++   Q931InformationElement *redirectingNumberIE;
++//!!!!!
+    Q931InformationElement *causeIE;
+    Q931InformationElement *keypadIE;
+    Q931InformationElement *callstateIE;
+@@ -706,6 +709,26 @@
+    (OOCTXT* pctxt, Q931Message *pmsg, const char *number, unsigned plan, unsigned type, 
+     unsigned presentation, unsigned screening);
+ 
++//!!!!!!!!!!!!!!! set redirecting number
++/**
++ * This function is used to add a RedirectingNumber ie to a q931 message.
++ * @param pmsg            Q931 message to which RedirectingNumber IE has to be
++ *                        added.
++ * @param number          Number of redirecting party
++ * @param plan            Numbering Plan used
++ * @param type            Type of number
++ * @param presentation    Presentation of the address is allowed or restricted.
++ * @param screening       Whether address was provided by endpoint or screened
++ *                        by gatekeeper.
++ * @param reason    	  redirect reason
++ *
++ * @return                OO_OK, on success. OO_FAILED, on failure.
++ */
++EXTERN int ooQ931SetRedirectingNumberIE
++   (OOCTXT* pctxt, Q931Message *pmsg, const char *number, unsigned plan, unsigned type, 
++    unsigned presentation, unsigned screening, unsigned reason);
++//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++
+ /** 
+  * This function is used to set a cause ie for a q931 message.
+  * @param pmsg        Valid Q931 Message
+--- ./ooh323c/src/oochannels.c+	2017-06-29 20:01:34.000000001 +0300
++++ ./ooh323c/src/oochannels.c	2017-06-29 20:07:05.000000001 +0300
+@@ -937,8 +937,12 @@
+ 
+       }
+ 
+-      toMin.tv_sec = 2; /* 2 sec */
+-      toMin.tv_usec = 100000; /* 100ms*/
++      //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++      //!! toMin.tv_sec = 2; /* 2 sec */
++      //!! toMin.tv_usec = 100000; /* 100ms*/
++      toMin.tv_sec = 0; /* 2 sec */
++      toMin.tv_usec = 200000; /* 100ms*/
++      //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       /*This is for test application. Not part of actual stack */
+   
+       if(ooProcessCallFDSETsAndTimers(call, pfds, nfds, &toMin) != OO_OK)
+--- ./ooh323c/src/ooh323.c+	2017-06-29 18:20:01.000000001 +0300
++++ ./ooh323c/src/ooh323.c	2017-06-30 11:28:30.000000001 +0300
+@@ -1066,7 +1066,12 @@
+       	OOTRACEINFO3("Tunneling and h245address provided."
+                      "Giving preference to Tunneling (%s, %s)\n", 
+                    	call->callType, call->callToken);
+-	if (call->h225version >= 4) {
++	//!!!orig block
++	//!!!if (call->h225version >= 4) {
++	//!!!	ret =ooSendTCSandMSD(call);
++	//!!!}
++	//!! my - check faststart IE in Q931, if absent - do NOT sent facility TSC
++	if (call->h225version >= 4 && alerting->m.fastStartPresent) {
+ 		ret =ooSendTCSandMSD(call);
+ 	}
+ 	if (ret != OO_OK)
+@@ -1111,7 +1116,12 @@
+          }
+          return OO_FAILED;
+        } else {
+-	if (call->h225version >= 4) {
++	//!!!orig block
++	//!!!if (call->h225version >= 4) {
++	//!!!	ret =ooSendTCSandMSD(call);
++	//!!!}
++	//!! my - check faststart IE in Q931, if absent - do NOT sent facility TSC
++	if (call->h225version >= 4 && alerting->m.fastStartPresent) {
+ 		ret =ooSendTCSandMSD(call);
+ 	}
+        }
+@@ -1755,7 +1765,7 @@
+          OOTRACEINFO3("H.225 Call Proceeding message received (%s, %s)\n",
+                       call->callType, call->callToken);
+          ooOnReceivedCallProceeding(call, q931Msg);
+-
++	 
+          ooFreeQ931Message(call->msgctxt, q931Msg);
+          break;
+ 
+@@ -1769,6 +1779,17 @@
+ 
+          if(gH323ep.h323Callbacks.onAlerting && call->callState<OO_CALL_CLEAR)
+             gH323ep.h323Callbacks.onAlerting(call);
++	 
++	//!!!! buggy SoftX do not send progress after alerting message
++	//indicate progress if have faststart TCS
++	if(q931Msg->userInfo->h323_uu_pdu.h323_message_body.u.alerting != NULL &&
++	   call->h225version >= 4 && 
++	   q931Msg->userInfo->h323_uu_pdu.h323_message_body.u.alerting->m.fastStartPresent) {
++		 if(gH323ep.h323Callbacks.onProgress && call->callState<OO_CALL_CLEAR)
++		    gH323ep.h323Callbacks.onProgress(call);
++	}
++	//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++
+          ooFreeQ931Message(call->msgctxt, q931Msg);
+          break;
+ 
